@@ -1,13 +1,17 @@
-from flask import Flask, make_response, request, session, render_template, send_file, Response
-from flask.views import MethodView
-from werkzeug import secure_filename
+import time
 from datetime import datetime
-import humanize
 import os
 import re
 import stat
 import json
 import mimetypes
+
+from flask import Flask, make_response, request, session, render_template, send_file, Response
+from flask.views import MethodView
+from werkzeug import secure_filename
+import humanize
+import paramiko
+
 
 app = Flask(__name__, static_url_path='/assets', static_folder='assets')
 root = os.path.expanduser('~')
@@ -44,7 +48,7 @@ def icon_fmt(filename):
 
 @app.template_filter('humanize')
 def time_humanize(timestamp):
-    mdate = datetime.utcfromtimestamp(timestamp)
+    mdate = datetime.fromtimestamp(timestamp)
     return humanize.naturaltime(mdate)
 
 def get_type(mode):
@@ -99,38 +103,96 @@ def get_range(request):
 class PathView(MethodView):
     def get(self, p=''):
         hide_dotfile = request.args.get('hide-dotfile', request.cookies.get('hide-dotfile', 'no'))
-
-        path = os.path.join(root, p)
-        if os.path.isdir(path):
-            contents = []
+        side = p[:p.find('/')]
+        if side == 'test':
+            path = os.path.join(root, p[p.find('/')+1:])
+        elif side == 'servers':
+            fullpath = p[p.find('/')+1:]
+            if fullpath == '':
+                contents = [
+                        {'name':'127.0.0.1','mtime':time.time(),'type':'dir'},
+                ]
+            else:
+                address = fullpath[:fullpath.find('/')]
+                path = os.path.join('.', fullpath[fullpath.find('/')+1:])
+        else:
+            contents = [
+                    {'name':'test','mtime':time.time(),'type':'dir'},
+                    {'name':'servers','mtime':time.time(),'type':'dir'},
+            ]
+        if p in ('','servers/'):
             total = {'size': 0, 'dir': 0, 'file': 0}
-            for filename in os.listdir(path):
-                if filename in ignored:
-                    continue
-                if hide_dotfile == 'yes' and filename[0] == '.':
-                    continue
-                filepath = os.path.join(path, filename)
-                stat_res = os.stat(filepath)
-                info = {}
-                info['name'] = filename
-                info['mtime'] = stat_res.st_mtime
-                ft = get_type(stat_res.st_mode)
-                info['type'] = ft
-                total[ft] += 1
-                sz = stat_res.st_size
-                info['size'] = sz
-                total['size'] += sz
-                contents.append(info)
             page = render_template('index.html', path=p, contents=contents, total=total, hide_dotfile=hide_dotfile)
             res = make_response(page, 200)
-            res.set_cookie('hide-dotfile', hide_dotfile, max_age=16070400)
-        elif os.path.isfile(path):
-            if 'Range' in request.headers:
-                start, end = get_range(request)
-                res = partial_response(path, start, end)
-            else:
-                res = send_file(path)
-                res.headers.add('Content-Disposition', 'attachment')
+        elif side == 'test':
+            if os.path.isdir(path):
+                contents = []
+                total = {'size': 0, 'dir': 0, 'file': 0}
+                for filename in os.listdir(path):
+                    if filename in ignored:
+                        continue
+                    if hide_dotfile == 'yes' and filename[0] == '.':
+                        continue
+                    filepath = os.path.join(path, filename)
+                    stat_res = os.stat(filepath)
+                    info = {}
+                    info['name'] = filename
+                    info['mtime'] = stat_res.st_mtime
+                    ft = get_type(stat_res.st_mode)
+                    info['type'] = ft
+                    total[ft] += 1
+                    sz = stat_res.st_size
+                    info['size'] = sz
+                    total['size'] += sz
+                    contents.append(info)
+                page = render_template('index.html', path=p, contents=contents, total=total, hide_dotfile=hide_dotfile)
+                res = make_response(page, 200)
+                res.set_cookie('hide-dotfile', hide_dotfile, max_age=16070400)
+            elif os.path.isfile(path):
+                if 'Range' in request.headers:
+                    start, end = get_range(request)
+                    res = partial_response(path, start, end)
+                else:
+                    res = send_file(path)
+                    res.headers.add('Content-Disposition', 'attachment')
+        elif side == 'servers':
+            if fullpath:
+                ssh = paramiko.SSHClient()
+                ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                ssh.connect(address)
+                sftp = ssh.open_sftp()
+                stat_res = sftp.lstat(path)
+                if stat.S_ISDIR(stat_res.st_mode):
+                    contents = []
+                    total = {'size': 0, 'dir': 0, 'file': 0}
+                    for filename in sftp.listdir(path):
+                        if filename in ignored:
+                            continue
+                        if hide_dotfile == 'yes' and filename[0] == '.':
+                            continue
+                        filepath = os.path.join(path, filename)
+                        stat_res = sftp.lstat(filepath)
+                        info = {}
+                        info['name'] = filename
+                        info['mtime'] = stat_res.st_mtime
+                        ft = get_type(stat_res.st_mode)
+                        info['type'] = ft
+                        total[ft] += 1
+                        sz = stat_res.st_size
+                        info['size'] = sz
+                        total['size'] += sz
+                        contents.append(info)
+                    page = render_template('index.html', path=p, contents=contents, total=total, hide_dotfile=hide_dotfile)
+                    res = make_response(page, 200)
+                    res.set_cookie('hide-dotfile', hide_dotfile, max_age=16070400)
+                else:
+                    f = sftp.open(path)
+                    if 'Range' in request.headers:
+                        start, end = get_range(request)
+                        res = partial_response(path, start, end)
+                    else:
+                        res = send_file(f,attachment_filename=os.path.split(path)[-1])
+                        res.headers.add('Content-Disposition', 'attachment')
         else:
             res = make_response('Not found', 404)
         return res
@@ -161,4 +223,5 @@ path_view = PathView.as_view('path_view')
 app.add_url_rule('/', view_func=path_view)
 app.add_url_rule('/<path:p>', view_func=path_view)
 
-app.run('0.0.0.0', 8000, threaded=True, debug=False)
+if __name__ == '__main__':
+    app.run('0.0.0.0', 8000, threaded=True, debug=True)
