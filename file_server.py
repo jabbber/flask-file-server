@@ -58,7 +58,7 @@ def get_type(mode):
         type = 'file'
     return type
 
-def partial_response(fd, mimetype, file_size, start=None, end=None):
+def partial_response(fd, mimetype, file_size, filename=None, start=None, end=None):
     if start is None:
         start = 0
     if end is None:
@@ -91,9 +91,43 @@ def partial_response(fd, mimetype, file_size, start=None, end=None):
             start, end, file_size,
         ),
     )
-    response.headers.add(
-        'Content-Length', length
+    if filename:
+        response.headers.add(
+            'Content-Disposition', 'attachment; filename={0}'.format(filename)
+        )
+    return response
+
+def file_response(fd, mimetype, file_size,filename=None):
+    def generate_large_file(fd,file_size):
+        fd.seek(0)
+        content = bytes()
+        content_len = 0
+        step = 2**20
+        while file_size > content_len:
+            if file_size - content_len < step:
+                read_length = file_size - content_len
+            else:
+                read_length = step
+            content += fd.read(read_length)
+            content_len += read_length
+            yield content
+
+    response = Response(
+        generate_large_file(fd,file_size),
+        200,
+        mimetype=mimetype,
+        direct_passthrough=True,
     )
+    response.headers.add(
+        'Content-Length', file_size
+    )
+    response.headers.add(
+        'Cache-Control', 'public, max-age=43200'
+    )
+    if filename:
+        response.headers.add(
+            'Content-Disposition', 'attachment; filename={0}'.format(filename)
+        )
     return response
 
 def get_range(request):
@@ -136,7 +170,7 @@ class PathView(MethodView):
                 path = os.path.join('.', fullpath[fullpath.find('/')+1:])
                 ssh = paramiko.SSHClient()
                 ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-                ssh.connect(address,compress=True)
+                ssh.connect(address)
                 sftp = ssh.open_sftp()
                 try:
                     current_stat = sftp.lstat(path)
@@ -185,10 +219,9 @@ class PathView(MethodView):
                 filename = os.path.split(path)[-1]
                 if 'Range' in request.headers:
                     start, end = get_range(request)
-                    res = partial_response(current_fd, mimetype, current_stat.st_size, start, end)
+                    res = partial_response(current_fd,mimetype,current_stat.st_size,filename=filename,start=start,end=end)
                 else:
-                    #res = partial_response(current_fd, mimetype, current_stat.st_size)
-                    res = send_file(current_fd,attachment_filename=filename,mimetype=mimetype,as_attachment=True)
+                    res = file_response(current_fd,mimetype,current_stat.st_size,filename=filename)
         else:
             res = make_response('Not found', 404)
         return res
