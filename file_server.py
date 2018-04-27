@@ -316,6 +316,7 @@ class PathView(MethodView):
 
 class LoginForm(FlaskForm):
     username = StringField(u'用户名',[DataRequired()])
+    password = PasswordField(u'密码',[DataRequired()])
     submit = SubmitField(u"登录")
 
 @app.route('/login', methods=['GET', 'POST'])
@@ -327,13 +328,21 @@ def login():
     if form.validate_on_submit():
         # Login and validate the user.
         # user should be an instance of your `User` class
-        login_user(User(form.username.data))
+        login_flag = True
+        if form.username.data != 'jabber.zhou':
+            flask.flash(u'登录失败','error')
+            login_flag = False
+        if form.password.data != '!password@':
+            flask.flash(u'登录失败','error')
+            login_flag = False
+        if login_flag:
+            login_user(User(form.username.data))
 
-        flask.flash('Logged in successfully.')
+            flask.flash('Logged in successfully.')
 
-        next = flask.request.args.get('next')
+            next = flask.request.args.get('next')
 
-        return flask.redirect(next or flask.url_for('index'))
+            return flask.redirect(next or flask.url_for('index'))
     return flask.render_template('login.html', form=form)
 
 @app.route("/logout")
