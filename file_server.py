@@ -150,7 +150,11 @@ class PathView(MethodView):
         side = p[:p.find('/')]
         res = None
         if side == username:
-            path = os.path.join(root, p[p.find('/')+1:])
+            path = os.path.join(root,username, p[p.find('/')+1:])
+            try:
+                os.stat(os.path.join(root,username))
+            except:
+                os.mkdir(os.path.join(root,username))
             try:
                 current_stat = os.stat(path)
             except:
@@ -232,7 +236,7 @@ class PathView(MethodView):
         side = p[:p.find('/')]
         not_real_path = False
         if side == username:
-            path = os.path.join(root, p[p.find('/')+1:])
+            path = os.path.join(root,username, p[p.find('/')+1:])
             try:
                 current_stat = os.stat(path)
             except:
