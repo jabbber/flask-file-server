@@ -227,14 +227,49 @@ class PathView(MethodView):
         return res
 
     def post(self, p=''):
-        path = os.path.join(root, p)
+        username = 'test'
+        hide_dotfile = request.args.get('hide-dotfile', request.cookies.get('hide-dotfile', 'no'))
+        side = p[:p.find('/')]
+        not_real_path = False
+        if side == username:
+            path = os.path.join(root, p[p.find('/')+1:])
+            try:
+                current_stat = os.stat(path)
+            except:
+                res = make_response('Not found', 404)
+            else:
+                def filesave(fl,path,file_size=None):
+                    fl.save(path)
+                current_save = filesave
+        elif side == 'servers':
+            fullpath = p[p.find('/')+1:]
+            if fullpath == '':
+                not_real_path = True
+            else:
+                address = fullpath[:fullpath.find('/')]
+                path = os.path.join('.', fullpath[fullpath.find('/')+1:])
+                ssh = paramiko.SSHClient()
+                ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                ssh.connect(address)
+                sftp = ssh.open_sftp()
+                try:
+                    current_stat = sftp.lstat(path)
+                except:
+                    res = make_response('Not found', 404)
+                else:
+                    current_save = sftp.putfo
+        else:
+            not_real_path = True
         info = {}
-        if os.path.isdir(path):
+        if not_real_path:
+            info['status'] = 'error'
+            info['msg'] = 'FORBIDDEN'
+        elif stat.S_ISDIR(current_stat.st_mode):
             files = request.files.getlist('files[]')
             for file in files:
                 try:
                     filename = secure_filename(file.filename)
-                    file.save(os.path.join(path, filename))
+                    current_save(file,os.path.join(path, filename))
                 except Exception as e:
                     info['status'] = 'error'
                     info['msg'] = str(e)
