@@ -6,14 +6,39 @@ import stat
 import json
 import mimetypes
 
+import flask
 from flask import Flask, make_response, request, session, render_template, send_file, Response
 from flask.views import MethodView
 from werkzeug import secure_filename
 import humanize
 import paramiko
-
+from flask_login import LoginManager,login_user,logout_user,login_required,current_user
+from flask_wtf import FlaskForm
+from wtforms import StringField,PasswordField,SubmitField
+from wtforms.validators import Required,DataRequired,Length,EqualTo
 
 app = Flask(__name__, static_url_path='/assets', static_folder='assets')
+app.config.from_pyfile("config.py")
+
+# flask_login
+login_manager = LoginManager()
+login_manager.init_app(app)
+login_manager.login_view = "login"
+
+class User:
+    def __init__(self,username):
+        self.username = username
+        self.is_authenticated = True
+        self.is_active = True
+        self.is_anonymous = False
+    def get_id(self):
+        return self.username
+
+@login_manager.user_loader
+def load_user(user_id):
+    return User(user_id)
+
+
 root = os.path.expanduser('~')
 
 ignored = ['.bzr', '$RECYCLE.BIN', '.DAV', '.DS_Store', '.git', '.hg', '.htaccess', '.htpasswd', '.Spotlight-V100', '.svn', '__MACOSX', 'ehthumbs.db', 'robots.txt', 'Thumbs.db', 'thumbs.tps']
@@ -144,8 +169,9 @@ def get_range(request):
         return 0, None
 
 class PathView(MethodView):
+    @login_required
     def get(self, p=''):
-        username = 'test'
+        username = current_user.username
         hide_dotfile = request.args.get('hide-dotfile', request.cookies.get('hide-dotfile', 'no'))
         side = p[:p.find('/')]
         res = None
@@ -230,8 +256,9 @@ class PathView(MethodView):
             res = make_response('Not found', 404)
         return res
 
+    @login_required
     def post(self, p=''):
-        username = 'test'
+        username = current_user.username
         hide_dotfile = request.args.get('hide-dotfile', request.cookies.get('hide-dotfile', 'no'))
         side = p[:p.find('/')]
         not_real_path = False
@@ -287,9 +314,40 @@ class PathView(MethodView):
         res.headers.add('Content-type', 'application/json')
         return res
 
+class LoginForm(FlaskForm):
+    username = StringField(u'用户名',[DataRequired()])
+    submit = SubmitField(u"登录")
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    # Here we use a class of some kind to represent and validate our
+    # client-side form data. For example, WTForms is a library that will
+    # handle this for us, and we use a custom LoginForm to validate.
+    form = LoginForm()
+    if form.validate_on_submit():
+        # Login and validate the user.
+        # user should be an instance of your `User` class
+        login_user(User(form.username.data))
+
+        flask.flash('Logged in successfully.')
+
+        next = flask.request.args.get('next')
+
+        return flask.redirect(next or flask.url_for('index'))
+    return flask.render_template('login.html', form=form)
+
+@app.route("/logout")
+@login_required
+def logout():
+    logout_user()
+    return flask.redirect(flask.url_for('index'))
+
+@app.route("/")
+def index():
+    return PathView.get('')
+
 path_view = PathView.as_view('path_view')
 app.add_url_rule('/', view_func=path_view)
 app.add_url_rule('/<path:p>', view_func=path_view)
-
 if __name__ == '__main__':
     app.run('0.0.0.0', 8000, threaded=True, debug=True)
